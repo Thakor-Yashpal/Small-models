@@ -1,0 +1,29 @@
+name: Test Notebooks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install jupyter nbconvert numpy torch tensorflow jax flax scikit-learn matplotlib
+
+      - name: Run all notebooks
+        run: |
+          find . -name "*.ipynb" -print0 | while IFS= read -r -d '' nb; do
+            echo "Executing $nb"
+            jupyter nbconvert --to notebook --execute "$nb" --output /dev/null
+          done
