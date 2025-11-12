@@ -1,0 +1,25 @@
+name: Lint and Format
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install linters
+        run: |
+          pip install black flake8
+
+      - name: Run black (check formatting)
+        run: black --check .
+
+      - name: Run flake8 (lint)
+        run: flake8 --ignore=E203,E266,E501,W503,F403,F401 .
