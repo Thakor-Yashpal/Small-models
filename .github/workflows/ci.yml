@@ -1,0 +1,124 @@
+name: CI — Lint, Test, Notebooks
+
+# Run on pushes and PRs to any branch
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        # If you have requirements.txt it will be used; otherwise install a minimal set
+        run: |
+          if [ -f requirements.txt ]; then
+            echo "Found requirements.txt — installing..."
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+          else
+            echo "No requirements.txt found — installing defaults for CI"
+            python -m pip install --upgrade pip
+            pip install black flake8 pytest jupyter nbconvert numpy matplotlib scikit-learn
+          fi
+
+      - name: Run black (format check)
+        run: |
+          # check only, fail CI on formatting problems
+          python -m black --check .
+
+      - name: Run flake8 (lint)
+        run: |
+          # ignore some common notebook-specific warnings; adjust as necessary
+          flake8 --ignore=E203,E266,E501,W503,F401 || true
+        # flake8 returns non-zero if issues reported; we allow it to continue but fail explicitly if you want
+      - name: Make flake8 strict (optional fail)
+        if: always()
+        run: |
+          echo "Failing CI on flake8 issues (remove this step to only warn)"
+          flake8 --ignore=E203,E266,E501,W503,F401
+
+      - name: Run pytest if tests/ exists
+        if: ${{ hashFiles('tests/**/*.py') != '' }}
+        run: |
+          pytest -q
+
+      - name: Execute Jupyter notebooks
+        run: |
+          set -euo pipefail
+
+          OUT_DIR=executed_notebooks
+          mkdir -p "$OUT_DIR"
+
+          # We'll execute each notebook with timeout. If any notebook fails, the workflow will fail.
+          # Adjust timeout (in seconds) if you have longer-running notebooks.
+          TIMEOUT=300
+
+          # Find notebooks but ignore typical hidden/system folders (node_modules/.git)
+          IFS=$'\n'
+          NB_LIST=$(find . -type f -name "*.ipynb" -not -path "./.git/*" -not -path "./.venv/*" -not -path "./env/*" -not -path "./executed_notebooks/*" | sort)
+          if [ -z "$NB_LIST" ]; then
+            echo "No notebooks found."
+          else
+            echo "Notebooks to run:"
+            echo "$NB_LIST"
+            for nb in $NB_LIST; do
+              echo "---- Executing: $nb ----"
+              # execute and write executed notebook to OUT_DIR preserving folder structure
+              OUT_PATH="$OUT_DIR/$(dirname "$nb")"
+              mkdir -p "$OUT_PATH"
+              python - <<PYCODE
+import nbformat, sys, os
+from nbconvert.preprocessors import ExecutePreprocessor
+nb_path = sys.argv[1]
+out_path = sys.argv[2]
+timeout = int(sys.argv[3])
+with open(nb_path, 'r', encoding='utf-8') as f:
+    nb = nbformat.read(f, as_version=4)
+ep = ExecutePreprocessor(timeout=timeout, kernel_name='python3')
+print(f"Running {nb_path} (timeout={timeout}s)...")
+ep.preprocess(nb, {'metadata': {'path': os.path.dirname(nb_path) or '.'}})
+out_file = os.path.join(out_path, os.path.basename(nb_path))
+with open(out_file, 'w', encoding='utf-8') as f:
+    nbformat.write(nb, f)
+print(f"Saved executed notebook to {out_file}")
+PYCODE
+              "$nb" "$OUT_PATH" "$TIMEOUT"
+            done
+          fi
+
+      - name: Upload executed notebooks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: executed-notebooks
+          path: executed_notebooks
+
+      - name: Summary
+        if: success()
+        run: echo "CI completed successfully."
+
